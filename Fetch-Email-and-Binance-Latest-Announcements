@@ -1,0 +1,158 @@
+import json
+import requests
+import datetime, time
+import poplib
+from email.parser import Parser
+from email.header import decode_header
+from email.utils import parseaddr
+
+# 异常提醒用,有提示
+def send_dingding_msg1(content, robot_id='钉钉机器人ID'):
+    try:
+        msg = {
+            "msgtype": "text",
+            "text": {"content": content + '\n' + datetime.datetime.now().strftime("%m-%d %H:%M:%S")}
+        }
+        headers = {"Content-Type": "application/json ;charset=utf-8 "}
+        url = 'https://oapi.dingtalk.com/robot/send?access_token=' + robot_id
+        body = json.dumps(msg)
+        status = requests.post(url, data=body, headers=headers, timeout=10)
+        if status.status_code == 200:
+            return status.json()
+
+        return status
+    except Exception as err:
+        print('钉钉发送失败', err)
+        
+def guess_charset(msg):
+    charset = msg.get_charset()
+    if charset is None:
+        content_type = msg.get('Content-Type', '').lower()
+        pos = content_type.find('charset=')
+        if pos >= 0:
+            charset = content_type[pos + 8:].strip()
+    return charset
+
+
+def decode_str(s):
+    value, charset = decode_header(s)[0]  
+    if charset:
+        value = value.decode(charset)
+    return value
+
+
+# indent用于缩进显示
+def handle_info(msg, indent=0):
+    global Subject, From, text_content # 本来想返回用，但调取正文之后出问题，在这里改成全局变量，就不用return
+    if indent == 0:
+        for header in ['Subject', 'From']:
+            value = msg.get(header, '')  # 这个是mail库中的函数Get a header value
+           
+            if value:
+                if header == 'Subject':
+                    Subject=decode_str(value)
+                else:
+                    hdr, addr = parseaddr(value) #  Parse addr into its constituent realname and email address parts
+                    name = decode_str(hdr)
+                    value = u'%s <%s>' % (name, addr)
+                    From = value
+        print('Subject',  Subject, 'From', From)
+
+    '''以下为正文部分，已调试'''
+    if text_or_not:
+        if (msg.is_multipart()): #正文能嵌套几部分，用这种方法层层筛选"""Return True if the message consists of multiple parts."""
+            parts = msg.get_payload()
+            for n, part in enumerate(parts):
+                # print('%spart %s' % ('  ' * indent, n))
+                # print('%s--------------------' % ('  ' * indent))
+                handle_info(part, indent + 1)  # 循环调用
+        else:
+            content_type = msg.get_content_type()
+            # print(content_type)
+            # if content_type == 'text/plain' or content_type == 'text/html': # 有两种格式，这里只取一种
+            if content_type == 'text/plain' :
+                text_content= msg.get_payload(decode=True)
+                charset = guess_charset(msg)
+                if charset:
+                    text_content= text_content.decode(charset)
+
+# 邮箱QQ  需要开启POP服务
+pop3_server = 'pop.qq.com'
+username = 'XXX@qq.com'
+password = 'XXX'#授权码
+
+# 连接到POP3服务器:
+server = poplib.POP3(pop3_server)
+# server = poplib.POP3_SSL(pop3_server, port=995)
+# 可以打开或关闭调试信息:
+# server.set_debuglevel(1)
+# 可选:打印POP3服务器的欢迎文字:
+# print(server.getwelcome().decode('utf-8'))
+# 身份认证:
+server.user(username)
+server.pass_(password)
+
+# stat()返回邮件数量和占用空间:
+# print('Messages: %s. Size: %s' % server.stat())
+# list()返回所有邮件的编号:
+resp, mails, octets = server.list()
+# 可以查看返回的列表类似[b'1 82923', b'2 2184', ...]
+num = 3  # 监控几个邮件
+text_or_not = 1 # 是否需要查看正文
+notice_List = []  # 内容列表
+Subject_List = []  # 主题列表
+From_List = []
+# 最新一封邮件, 注意索引号从1开始, 最大的是最新的邮件
+i = 0
+index = len(mails)
+while i < num:  # 获取多个邮件
+    resp, lines, octets = server.retr(index-i)
+
+    # 可以获得整个邮件的原始文本:
+    msg_content = b'\r\n'.join(lines).decode('utf-8')  
+
+    # 解析出邮件:这个是库的内容，把邮件内容解析为Message对象
+    msg = Parser().parsestr(msg_content)
+    '''但是这个Message对象本身可能是一个MIMEMultipart对象，即包含嵌套的其他MIMEBase对象，嵌套可能还不止一层。
+所以我们要递归地打印出Message对象的层次结构：'''
+    # Subject, From = handle_info(msg)
+    handle_info(msg)
+    Subject_List.append(Subject)
+    From_List.append(From)
+    i = i+1
+print('邮件主题', Subject_List)
+print('发件人是', From_List)
+
+while True:
+    try:
+        # 前面已经链接，自动调用就行了
+        resp, mails, octets = server.list()
+        index = len(mails)
+        resp, lines, octets = server.retr(index)
+        msg_content = b'\r\n'.join(lines).decode('utf-8')
+        msg = Parser().parsestr(msg_content)
+        handle_info(msg)
+
+        # 新邮件提醒
+        if Subject not in Subject_List:
+            content = '新邮件' + '\n' + Subject
+            '''因为下面这一个错误，耽误我大半天的时间，print_info这种垃圾名字不能用，因为在输入print时回车会带出来，改成handle_info'''
+            # print_info(content)
+            print(content)
+            print('邮件正文', text_content)
+            send_msg1 = send_dingding_msg1(content)
+            print(send_msg1)
+            # break
+            
+        # 币安新邮件提醒
+        if 'binance' in From and (Subject not in Subject_List):
+            print('币安新公告', Subject)
+            content = '币安新公告' + '\n' + Subject
+            print('邮件正文', text_content)
+            send_msg1 = send_dingding_msg1(content)
+            print(send_msg1)
+
+        time.sleep(14)
+    except Exception as err:
+        time.sleep(2)
+        print('查询错误', err) 
