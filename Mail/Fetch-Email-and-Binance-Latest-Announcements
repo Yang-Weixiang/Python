@@ -126,7 +126,16 @@ print('发件人是', From_List)
 
 while True:
     try:
-        # 前面已经链接，自动调用就行了
+        # 连接到POP3服务器, 需要重新连接，不然断网之后就一直报错了
+        server = poplib.POP3(pop3_server)
+        # server = poplib.POP3_SSL(pop3_server, port=995)
+        # 可以打开或关闭调试信息:
+        # server.set_debuglevel(1)
+        # 可选:打印POP3服务器的欢迎文字:
+        # print(server.getwelcome().decode('utf-8'))
+        # 身份认证:
+        server.user(username)
+        server.pass_(password)
         resp, mails, octets = server.list()
         index = len(mails)
         resp, lines, octets = server.retr(index)
